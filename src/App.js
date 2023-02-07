@@ -14,16 +14,22 @@ const SubApp =
 	}
 
 const App = () => {
-	//console.log('App 渲染')
 	const [number, setNumber] = useState(0);
-	const addNumber = useCallback(() => {
-		//console.log(`被点了 number:${number}`)
+	const [helloVisiable, setHelloVisiable] = useState(true);
+	const addNumber = () => {
 		setNumber(number+1);
-	}, []);
+	};
 	return (
 		<div title='hello'>
-			number: <b>{number}</b> <br />
-			<SubApp addNumber={addNumber} />
+			number: <b>{number}</b>
+			<button onClick={addNumber}>AddNumber</button>
+			<button onClick={() => setHelloVisiable(!helloVisiable)}>{helloVisiable ? 'hidden' : 'show'}</button>
+			{helloVisiable ? <p>hello</p> : null}
+			<div>
+				<div>
+					divdiv
+				</div>
+			</div>
 		</div>
 	);
 }

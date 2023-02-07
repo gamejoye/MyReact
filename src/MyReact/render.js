@@ -13,6 +13,7 @@ const reconcilenChildren = (fiber, elements) => {
     let index = 0;
     let prevSibling = null;
     let oldFiber = fiber.alternate && fiber.alternate.child;
+    console.log(oldFiber?.props?.children);
     while (index < elements.length || !!oldFiber) {
 
         let childElement = elements[index];
@@ -59,8 +60,7 @@ const reconcilenChildren = (fiber, elements) => {
         } else {
             prevSibling.sibling = newFiber;
         }
-        prevSibling = newFiber;
-
+        if(newFiber) prevSibling = newFiber;
         index++;
     }
 }
@@ -325,7 +325,7 @@ const commitWork = (fiber) => {
         } else if (fiber.tag === 'DELETION') {
             commitDeletion(fiber, parentDom)
         } else if (fiber.tag === 'UPDATION') {
-            if (!fiber.store?.validated) updateDom(fiber.dom, fiber.alternate, fiber.props);
+            updateDom(fiber.dom, fiber.alternate, fiber.props);
         }
     }
 
@@ -360,8 +360,8 @@ const workLoop = (idleDeadLine) => {
 
 requestIdleCallback(workLoop);
 
-const createDom = (element) => {
-    const { type, props } = element;
+const createDom = (fiber) => {
+    const { type, props } = fiber;
     const dom = type === '#text'
         ? document.createTextNode('')
         : document.createElement(type);
