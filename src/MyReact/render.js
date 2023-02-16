@@ -8,61 +8,170 @@ let useEffectHookIndex = 0;
 let useMemoHookIndex = 0;
 let useCallbackHookIndex = 0;
 
+const updateChildren = (fiber, nextChildren, prevChildren, lastPlacedFiber, prevSibling) => {
+    /*
+    * dom diff
+    */
+    if (!prevChildren
+        || nextChildren.some(
+            child => child.props.key === undefined || child.props.key === null
+        )) {
+        nextChildren.forEach(
+            (child, index) => {
+                nextChildren[index] = {
+                    ...child,
+                    dom: null,
+                    parent: fiber,
+                    alternate: null,
+                    tag: 'ADDITION',
+                    lastPlacedFiber
+                }
+                lastPlacedFiber = nextChildren[index];
+                if (prevSibling) prevSibling.sibling = nextChildren[index];
+                prevSibling = nextChildren[index];
+            }
+        )
+        prevChildren?.forEach(
+            child => {
+                child.tag = 'DELETION';
+                deletions.push(child)
+            }
+        )
+    } else {
+        const map = new Map();
+        prevChildren.forEach(
+            (child) => {
+                if (child.props.key) {
+                    map.set(child.props.key, child)
+                }
+            }
+        );
+        let lastIndex = 0;
+        nextChildren.forEach(
+            (child, index) => {
+                const oldFiber = map.get(child.props.key);
+                if (oldFiber) {
+                    // 旧集合有节点
+                    map.delete(child.props.key);
+                    let tag = '';
+                    if (oldFiber.mountIndex < lastIndex) {
+                        // 需要对旧节点右移
+                        tag = 'MOVE';
+                    }
+                    nextChildren[index] = {
+                        ...child,
+                        dom: oldFiber.dom,
+                        parent: fiber,
+                        alternate: oldFiber,
+                        tag,
+                        mountIndex: index,
+                        lastPlacedFiber
+                    }
+                    lastIndex = Math.max(lastIndex, oldFiber.mountIndex);
+                } else {
+                    // 旧集合没有节点， 需要新增节点
+                    nextChildren[index] = {
+                        ...child,
+                        dom: null,
+                        parent: fiber,
+                        alternate: null,
+                        tag: 'ADDITION',
+                        mountIndex: index,
+                        lastPlacedFiber
+                    }
+                }
+                lastPlacedFiber = nextChildren[index];
+                if (prevSibling) prevSibling.sibling = nextChildren[index];
+                prevSibling = nextChildren[index];
+            }
+        )
+        map.forEach(
+            (child) => {
+                child.tag = 'DELETION';
+                deletions.push(child);
+            }
+        )
+    }
+    return {
+        _firstPlacedFiber: nextChildren[0],
+        _lastPlacedFiber: lastPlacedFiber,
+    };
+}
+
 // 打标签函数
-const reconcilenChildren = (fiber, elements) => {
-    let index = 0;
+const reconcileChildren = (fiber, elements) => {
     let prevSibling = null;
-    let oldFiber = fiber.alternate && fiber.alternate.child;
-    console.log(oldFiber?.props?.children);
-    while (index < elements.length || !!oldFiber) {
-
-        let childElement = elements[index];
-
-        const sameType =
-            oldFiber
+    const oldFibers = fiber.alternate?.childFibers ?? [];
+    let lastPlacedFiber = null;
+    const childFibers = [];
+    elements.forEach((childElement, index) => {
+        const oldFiber = oldFibers[index];
+        const sameType = oldFiber
             && childElement
+            && oldFiber.type
+            && childElement.type
             && oldFiber.type === childElement.type;
-
         let newFiber = null;
-        if (sameType) {
+
+        if (Array.isArray(childElement)) {
+            const { _lastPlacedFiber } = updateChildren(fiber, childElement, oldFiber, lastPlacedFiber, prevSibling);
+            lastPlacedFiber = _lastPlacedFiber ?? lastPlacedFiber;
+            newFiber = childElement;
+        } else if (oldFiber && sameType) {
             newFiber = {
                 type: oldFiber.type,
                 props: childElement.props,
                 dom: oldFiber.dom,
                 parent: fiber,
                 alternate: oldFiber,
-                tag: 'UPDATION'
+                tag: 'UPDATION',
             }
-        }
-
-        if (!sameType && childElement) {
-            newFiber = {
-                type: childElement.type,
-                props: childElement.props,
-                dom: null,
-                parent: fiber,
-                alternate: null,
-                tag: 'ADDITION'
-            }
-        }
-
-        if (!sameType && oldFiber) {
-            oldFiber.tag = 'DELETION';
-            deletions.push(oldFiber);
-        }
-
-        if (oldFiber) {
-            oldFiber = oldFiber.sibling;
-        }
-
-        if (index === 0) {
-            fiber.child = newFiber;
+            lastPlacedFiber = newFiber;
         } else {
-            prevSibling.sibling = newFiber;
+            if (childElement) {
+                newFiber = {
+                    type: childElement.type,
+                    props: childElement.props,
+                    dom: null,
+                    parent: fiber,
+                    alternate: null,
+                    tag: 'ADDITION',
+                    lastPlacedFiber
+                }
+                lastPlacedFiber = newFiber;
+            }
+            if (oldFiber) {
+                oldFiber.tag = 'DELETION';
+                deletions.push(oldFiber);
+            }
         }
-        if(newFiber) prevSibling = newFiber;
+
+        if (Array.isArray(newFiber)) {
+            const firstFiber = newFiber[0];
+            const lastFiber = newFiber[newFiber.length - 1];
+            if (index === 0) {
+                fiber.child = firstFiber;
+            } else {
+                prevSibling.sibling = firstFiber;
+            }
+            if (lastFiber) {
+                prevSibling = lastFiber;
+            }
+        } else {
+            if (index === 0) {
+                fiber.child = newFiber;
+            } else {
+                prevSibling.sibling = newFiber;
+            }
+            if (newFiber) {
+                prevSibling = newFiber;
+            }
+        }
+
+        childFibers.push(newFiber);
         index++;
-    }
+    });
+    fiber.childFibers = childFibers;
 }
 
 export const useState = initial => {
@@ -78,7 +187,7 @@ export const useState = initial => {
     hook.queue.push(hook.state)
     const setState = (action) => {
         const lastIndex = hook.queue.length - 1;
-        if(action === hook.queue[lastIndex]) return; // 相同则数据跳过渲染
+        if (action === hook.queue[lastIndex]) return; // 相同则数据跳过渲染
         hook.queue.push(action);
         root = {
             dom: prevRoot.dom,
@@ -95,8 +204,8 @@ export const useState = initial => {
 }
 
 const areEqual = (prevDependentDatas, nextDependentDatas, oldHook) => {
-    if(!oldHook) return false; // 第一次渲染
-    if(prevDependentDatas.length !== nextDependentDatas.length) return false;
+    if (!oldHook) return false; // 第一次渲染
+    if (prevDependentDatas.length !== nextDependentDatas.length) return false;
     return prevDependentDatas.every((val, index) => val === nextDependentDatas[index]);
 }
 
@@ -179,10 +288,10 @@ export const useCallback = (newCallback, dependentDatas) => {
         dependentDatas: oldHook?.dependentDatas ? oldHook.dependentDatas : [],
         callback: oldHook?.callback
     };
-    if(dependentDatas === undefined) {
+    if (dependentDatas === undefined) {
         hook.callback = newCallback;
     } else {
-        if(!Array.isArray(dependentDatas)) {
+        if (!Array.isArray(dependentDatas)) {
             throw new Error('useCallBack第二个参数必须为数组');
         } else {
             const equal = areEqual(hook.dependentDatas, dependentDatas, oldHook);
@@ -224,19 +333,22 @@ const updateFunctionComponent = (fiber) => {
     initialUseMemoHooks();
     initialUseCallBack();
     const children = [fiber.type(fiber.props)];
-    reconcilenChildren(fiber, children);
+    reconcileChildren(fiber, children);
 }
 const updateHostComponent = (fiber) => {
+
     if (!fiber.dom) {
         fiber.dom = createDom(fiber);
     }
+
     const elements = fiber?.props?.children;
-    reconcilenChildren(fiber, elements);
+    reconcileChildren(fiber, elements);
 }
 
 
 // 执行当前工作单元获取下一个工作单元
 const worKUnitAndGetNext = (fiber) => {
+
     const isFunctionComponent = fiber.type instanceof Function;
     if (isFunctionComponent) {
         updateFunctionComponent(fiber);
@@ -306,10 +418,16 @@ const updateDom = (dom, prevProps, nextProps) => {
 
 const commitDeletion = (fiber, parentDom) => {
     if (fiber.dom) {
+        if(fiber.lastPlacedFiber) fiber.lastPlacedFiber = fiber.sibling
         parentDom.removeChild(fiber.dom);
     } else {
         commitDeletion(fiber.child, parentDom);
     }
+}
+
+const moveDom = (parentDom, dom, node) => {
+    commitDeletion(dom, parentDom);
+    parentDom.insertBefore(dom, node);
 }
 
 const commitWork = (fiber) => {
@@ -321,11 +439,14 @@ const commitWork = (fiber) => {
     const parentDom = parentDomFiber.dom;
     if (!!fiber.dom) {
         if (fiber.tag === 'ADDITION') {
-            parentDom.appendChild(fiber.dom);
+            parentDom.insertBefore(fiber.dom, fiber.lastPlacedFiber?.dom?.nextSibling);
         } else if (fiber.tag === 'DELETION') {
-            commitDeletion(fiber, parentDom)
+            commitDeletion(fiber, parentDom);
+            return;
         } else if (fiber.tag === 'UPDATION') {
-            updateDom(fiber.dom, fiber.alternate, fiber.props);
+            updateDom(fiber.dom, fiber.alternate.props, fiber.props);
+        } else if (fiber.tag === 'MOVE') {
+            moveDom(parentDom, fiber.dom, fiber.lastPlacedFiber.dom.nextSibling);
         }
     }
 

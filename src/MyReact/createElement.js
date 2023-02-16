@@ -4,9 +4,11 @@ const createElement = (type, props, ...children) => {
         type,
         props: {
             ...props,
-            children: children.map(dom => typeof dom === 'object'
-            ? dom
-            : createTextElement(dom))
+            children: children.map(
+                child => typeof child === 'object'
+                    ? child
+                    : createTextElement(child)
+            )
         }
     }
 }
