@@ -1,14 +1,204 @@
-let nextUnit = null;
-let root = null;
-let prevRoot = null;
-let deletions = [];
-let nowFiber = null;
-let useStateHookIndex = 0;
+import { DispatchAction } from "./DispatchAction";
+
+export interface Update<S, A> {
+    lane: number;
+    action: A;
+    hasEagerState: boolean;
+    eagerState: S | null;
+    next: Update<S, A>;
+}
+
+export interface UpdateQueue<S, A> {
+    pending: Update<S, A> | null;
+    lanes: number[] | null;
+    dispatch: ((action: A) => void) | null;
+    lastRenderedReducer: ((state: S, action: A) => S) | null;
+    lastRenderedState: S | null;
+}
+
+export interface Hook {
+    memoizedState: any;
+    baseState: any;
+    baseQueue: Update<any, any> | null;
+    queue: UpdateQueue<any, any> | null;
+    next: Hook | null;
+}
+
+interface Dispatch<A> {
+    A: void;
+}
+
+type BasicStateAction<S> = (state: S) => S | S;
+
+export const fiberRoot: any = {};
+
+function basicStateReducer<S>(state: S, action: BasicStateAction<S>): S {
+    return typeof action === 'function' ? action(state) : action;
+}
+
+let currentlyRenderingFiber: any = null;
+let workInProgressHook: Hook | null = null;
+let currentHook: Hook | null = null;
+
 let useEffectHookIndex = 0;
 let useMemoHookIndex = 0;
 let useCallbackHookIndex = 0;
 
-const updateChildren = (fiber, nextChildren, prevChildren, lastPlacedFiber, prevSibling) => {
+function mountWorkInProgressHook(): Hook {
+    const hook: Hook = {
+        memoizedState: null,
+        baseQueue: null,
+        baseState: null,
+        queue: null,
+        next: null
+    }
+
+    if (workInProgressHook === null) {
+        // 这是第一个在链表里面的hook
+        currentlyRenderingFiber.memoizedState = workInProgressHook = hook;
+    } else {
+        workInProgressHook = workInProgressHook.next = hook;
+    }
+    return workInProgressHook;
+}
+
+function mountState<S, A>(
+    initial: S
+): [S, Dispatch<A>] {
+    const hook = mountWorkInProgressHook();
+
+    let initialState = initial;
+    if (initial instanceof Function) {
+        initialState = initial();
+    }
+
+    hook.memoizedState = hook.baseState = initialState;
+
+    const queue: UpdateQueue<S, A> = {
+        pending: null,
+        lanes: null,
+        dispatch: null,
+        lastRenderedReducer: null,
+        lastRenderedState: initialState as S
+    }
+    hook.queue = queue;
+
+    const dispatch: Dispatch<A> = queue.dispatch = DispatchAction.bind(null, currentlyRenderingFiber, hook.queue);
+
+    return [hook.memoizedState, dispatch];
+}
+
+function updateWorkInProgressHook(): Hook {
+
+    let nextCurrentHook: Hook | null;
+    if (currentHook === null) {
+        const currentFiber = currentlyRenderingFiber.alternate;
+        if (currentFiber !== null) {
+            nextCurrentHook = currentFiber.memoizedState;
+        } else {
+            nextCurrentHook = null;
+        }
+    } else {
+        nextCurrentHook = currentHook.next;
+    }
+
+    currentHook = nextCurrentHook;
+
+    let nextWorkInProgressHook: Hook | null = null;
+
+    if (workInProgressHook === null) {
+        nextWorkInProgressHook = currentlyRenderingFiber.memoizedState;
+    } else {
+        nextWorkInProgressHook = workInProgressHook.next;
+    }
+
+    if (nextCurrentHook === null) {
+        throw new Error('check your code');
+    }
+
+    const newHook: Hook = {
+        baseQueue: nextCurrentHook.baseQueue,
+        baseState: nextCurrentHook.baseState,
+        memoizedState: nextCurrentHook.memoizedState,
+        queue: nextCurrentHook.queue,
+        next: null
+    }
+
+    if (workInProgressHook === null) {
+        currentlyRenderingFiber.memoizedState = workInProgressHook = newHook;
+    } else {
+        workInProgressHook = workInProgressHook.next = newHook;
+    }
+
+    return workInProgressHook;
+}
+
+function updateState<S, A>(
+    initial: S,
+    reducer: (newState: S, action: A) => S
+): [S, Dispatch<A>] {
+
+    const hook = updateWorkInProgressHook();
+    const queue = hook.queue;
+
+    if (queue === null) {
+        throw new Error(
+            "这里应该有个queue, 这可能是MyReact的问题"
+        )
+    }
+
+    const current: Hook = (currentHook as any);
+
+    let baseQueue = current.baseQueue;
+
+    const pendingQueue = queue.pending;
+    if (pendingQueue !== null) {
+        // 需要合并
+        if (baseQueue !== null) {
+            const baseFirst = baseQueue.next;
+            const pendingFirst = pendingQueue.next;
+            baseQueue.next = pendingFirst;
+            pendingQueue.next = baseFirst;
+        }
+        current.baseQueue = baseQueue = pendingQueue;
+        queue.pending = null;
+    }
+
+    if (baseQueue !== null) {
+        // 更新
+        const first = baseQueue.next;
+        let newState = current.baseState;
+        let update = first;
+        do {
+            const action = update.action;
+
+            newState = reducer(newState, action);
+            update = update.next
+        } while (update !== null && update !== first);
+
+        hook.memoizedState = newState;
+    }
+
+    // 重新在fiber上挂上hook
+    currentlyRenderingFiber.memoizedState = hook;
+    const dispatch: Dispatch<A> = (queue.dispatch as any);
+
+    return [hook.memoizedState, dispatch];
+}
+
+export function useState<S, A>(
+    initial: S
+): [S, Dispatch<A>] {
+
+    if (currentlyRenderingFiber.alternate?.memoizedState) {
+        return updateState(initial, basicStateReducer as any);
+    }
+
+    return mountState<S, A>(initial);
+
+}
+
+const updateChildren = (fiber: any, nextChildren: any[], prevChildren: any[], lastPlacedFiber: any, prevSibling: any) => {
     /*
     * dom diff
     */
@@ -34,7 +224,7 @@ const updateChildren = (fiber, nextChildren, prevChildren, lastPlacedFiber, prev
         prevChildren?.forEach(
             child => {
                 child.tag = 'DELETION';
-                deletions.push(child)
+                fiberRoot.deletions.push(child)
             }
         )
     } else {
@@ -88,7 +278,7 @@ const updateChildren = (fiber, nextChildren, prevChildren, lastPlacedFiber, prev
         map.forEach(
             (child) => {
                 child.tag = 'DELETION';
-                deletions.push(child);
+                fiberRoot.deletions.push(child);
             }
         )
     }
@@ -99,19 +289,19 @@ const updateChildren = (fiber, nextChildren, prevChildren, lastPlacedFiber, prev
 }
 
 // 打标签函数
-const reconcileChildren = (fiber, elements) => {
-    let prevSibling = null;
-    const oldFibers = fiber.alternate?.childFibers ?? [];
-    let lastPlacedFiber = null;
-    const childFibers = [];
+const reconcileChildren = (fiber: any, elements: any[]) => {
+    let prevSibling: any = null;
+    const oldFibers: any[] = fiber.alternate?.childFibers ?? [];
+    let lastPlacedFiber: any = null;
+    const childFibers: any[] = [];
     elements.forEach((childElement, index) => {
-        const oldFiber = oldFibers[index];
+        let oldFiber = oldFibers[index];
         const sameType = oldFiber
             && childElement
             && oldFiber.type
             && childElement.type
             && oldFiber.type === childElement.type;
-        let newFiber = null;
+        let newFiber: any | any[] | null = null;
 
         if (Array.isArray(childElement)) {
             const { _lastPlacedFiber } = updateChildren(fiber, childElement, oldFiber, lastPlacedFiber, prevSibling);
@@ -142,7 +332,7 @@ const reconcileChildren = (fiber, elements) => {
             }
             if (oldFiber) {
                 oldFiber.tag = 'DELETION';
-                deletions.push(oldFiber);
+                fiberRoot.deletions.push(oldFiber);
             }
         }
 
@@ -174,47 +364,18 @@ const reconcileChildren = (fiber, elements) => {
     fiber.childFibers = childFibers;
 }
 
-export const useState = initial => {
-    const oldHook = nowFiber?.alternate?.useStateHooks?.[useStateHookIndex];
-    const hook = {
-        state: oldHook ? oldHook.state : initial,
-        queue: []
-    };
-    if (oldHook && oldHook.queue.length !== 0) {
-        // 直接拿之前最新的数据
-        hook.state = oldHook.queue[oldHook.queue.length - 1];
-    }
-    hook.queue.push(hook.state)
-    const setState = (action) => {
-        const lastIndex = hook.queue.length - 1;
-        if (action === hook.queue[lastIndex]) return; // 相同则数据跳过渲染
-        hook.queue.push(action);
-        root = {
-            dom: prevRoot.dom,
-            props: prevRoot.props,
-            alternate: prevRoot
-        }
-        nextUnit = root;
-        deletions = [];
-    }
-    nowFiber.useStateHooks.push(hook);
-    useStateHookIndex++;
-
-    return [hook.state, setState];
-}
-
-const areEqual = (prevDependentDatas, nextDependentDatas, oldHook) => {
+const areEqual = (prevDependentDatas: any[], nextDependentDatas: any[], oldHook: any) => {
     if (!oldHook) return false; // 第一次渲染
     if (prevDependentDatas.length !== nextDependentDatas.length) return false;
     return prevDependentDatas.every((val, index) => val === nextDependentDatas[index]);
 }
 
 
-export const useEffect = (callback, dependentDatas) => {
+export const useEffect = (callback: any, dependentDatas: any) => {
     if (!(callback instanceof Function)) {
         throw new Error('useEffect第一个参数必须为函数');
     }
-    const oldHook = nowFiber?.alternate?.useEffectHooks[useEffectHookIndex];
+    const oldHook = currentlyRenderingFiber?.alternate?.useEffectHooks[useEffectHookIndex];
     const hook = {
         dependentDatas: oldHook?.dependentDatas ? oldHook.dependentDatas : [],
         unMountAction: oldHook?.unMountAction
@@ -238,10 +399,10 @@ export const useEffect = (callback, dependentDatas) => {
             }
         }
     }
-    nowFiber.useEffectHooks.push(hook);
+    currentlyRenderingFiber.useEffectHooks.push(hook);
     useEffectHookIndex++;
 }
-export const useMemo = (componentFactory, dependentDatas) => {
+export const useMemo = (componentFactory: any, dependentDatas: any) => {
 
     /*
      * 先别用
@@ -249,7 +410,7 @@ export const useMemo = (componentFactory, dependentDatas) => {
     if (!(componentFactory instanceof Function)) {
         throw new Error('useMemo第一个参数必须为函数');
     }
-    const oldHook = nowFiber?.alternate?.useMemoHooks[useMemoHookIndex];
+    const oldHook = currentlyRenderingFiber?.alternate?.useMemoHooks[useMemoHookIndex];
     const hook = {
         dependentDatas: oldHook?.dependentDatas ? oldHook.dependentDatas : [],
         component: oldHook?.component,
@@ -274,16 +435,16 @@ export const useMemo = (componentFactory, dependentDatas) => {
     hook.component._store = {
         validated,
     }
-    nowFiber.useMemoHooks.push(hook);
+    currentlyRenderingFiber.useMemoHooks.push(hook);
     useMemoHookIndex++;
     return hook.component;
 }
 
-export const useCallback = (newCallback, dependentDatas) => {
+export const useCallback = (newCallback: any, dependentDatas: any) => {
     if (!(newCallback instanceof Function)) {
         throw new Error('useCallback第一个参数必须为函数');
     }
-    const oldHook = nowFiber?.alternate?.useCallbackHooks[useCallbackHookIndex];
+    const oldHook = currentlyRenderingFiber?.alternate?.useCallbackHooks[useCallbackHookIndex];
     const hook = {
         dependentDatas: oldHook?.dependentDatas ? oldHook.dependentDatas : [],
         callback: oldHook?.callback
@@ -301,41 +462,35 @@ export const useCallback = (newCallback, dependentDatas) => {
             }
         }
     }
-    nowFiber.useCallbackHooks.push(hook);
+    currentlyRenderingFiber.useCallbackHooks.push(hook);
     useCallbackHookIndex++;
     return hook.callback;
 }
 
-const initialUseStateHooks = () => {
-    nowFiber.useStateHooks = [];
-    useStateHookIndex = 0;
-}
-
 const initialUseEffectHooks = () => {
-    nowFiber.useEffectHooks = [];
+    currentlyRenderingFiber.useEffectHooks = [];
     useEffectHookIndex = 0;
 }
 
 const initialUseMemoHooks = () => {
-    nowFiber.useMemoHooks = [];
+    currentlyRenderingFiber.useMemoHooks = [];
     useMemoHookIndex = 0;
 }
 
 const initialUseCallBack = () => {
-    nowFiber.useCallbackHooks = [];
+    currentlyRenderingFiber.useCallbackHooks = [];
     useCallbackHookIndex = 0;
 }
 
-const updateFunctionComponent = (fiber) => {
-    nowFiber = fiber;
-    initialUseStateHooks();
+const updateFunctionComponent = (fiber: any) => {
+    currentlyRenderingFiber = fiber;
     initialUseEffectHooks();
     initialUseMemoHooks();
     initialUseCallBack();
     const children = [fiber.type(fiber.props)];
     reconcileChildren(fiber, children);
 }
-const updateHostComponent = (fiber) => {
+const updateHostComponent = (fiber: any) => {
 
     if (!fiber.dom) {
         fiber.dom = createDom(fiber);
@@ -347,8 +502,8 @@ const updateHostComponent = (fiber) => {
 
 
 // 执行当前工作单元获取下一个工作单元
-const worKUnitAndGetNext = (fiber) => {
-
+const worKUnitAndGetNext = (fiber: any) => {
+    console.log('fiber: ', fiber)
     const isFunctionComponent = fiber.type instanceof Function;
     if (isFunctionComponent) {
         updateFunctionComponent(fiber);
@@ -374,11 +529,11 @@ const worKUnitAndGetNext = (fiber) => {
 
 // 更新真实dom
 // 一些箭头函数方便减少码量
-const isEvent = key => key.startsWith('on');
-const isProperty = key => key !== 'children' && !isEvent(key);
-const isGone = (prev, next) => key => !(key in next);
-const isNew = (prev, next) => key => prev[key] !== next[key];
-const updateDom = (dom, prevProps, nextProps) => {
+const isEvent = (key: string) => key.startsWith('on');
+const isProperty = (key: string) => key !== 'children' && !isEvent(key);
+const isGone = (prev: any, next: any) => (key: string) => !(key in next);
+const isNew = (prev: any, next: any) => (key: string) => prev[key] !== next[key];
+const updateDom = (dom: any, prevProps: any, nextProps: any) => {
 
     // 移除不存在新props里的事件
     Object.keys(prevProps)
@@ -416,21 +571,21 @@ const updateDom = (dom, prevProps, nextProps) => {
  * commitXXX 函数用于一次性完整提交dom元素
 */
 
-const commitDeletion = (fiber, parentDom) => {
+const commitDeletion = (fiber: any, parentDom: any) => {
     if (fiber.dom) {
-        if(fiber.lastPlacedFiber) fiber.lastPlacedFiber = fiber.sibling
+        if (fiber.lastPlacedFiber) fiber.lastPlacedFiber = fiber.sibling
         parentDom.removeChild(fiber.dom);
     } else {
         commitDeletion(fiber.child, parentDom);
     }
 }
 
-const moveDom = (parentDom, dom, node) => {
+const moveDom = (parentDom: any, dom: any, node: any) => {
     commitDeletion(dom, parentDom);
     parentDom.insertBefore(dom, node);
 }
 
-const commitWork = (fiber) => {
+const commitWork = (fiber: any) => {
     if (!fiber) return;
     let parentDomFiber = fiber.parent;
     while (!parentDomFiber.dom) {
@@ -455,23 +610,23 @@ const commitWork = (fiber) => {
 }
 
 const commitRoot = () => {
-    commitWork(root.child);
-    deletions.forEach(commitWork)
+    commitWork(fiberRoot.root.child);
+    fiberRoot.deletions.forEach(commitWork)
 
-    prevRoot = root;
-    root = null;
+    fiberRoot.prevRoot = fiberRoot.root;
+    fiberRoot.root = null;
 }
 
 
 
-const workLoop = (idleDeadLine) => {
+const workLoop = (idleDeadLine: any) => {
     let shouldYield = true;
 
-    while (nextUnit && shouldYield) {
-        nextUnit = worKUnitAndGetNext(nextUnit);
+    while (fiberRoot.nextUnit && shouldYield) {
+        fiberRoot.nextUnit = worKUnitAndGetNext(fiberRoot.nextUnit);
         shouldYield = idleDeadLine.timeRemaining() > 1;
     }
-    if (!nextUnit && root) {
+    if (!fiberRoot.nextUnit && fiberRoot.root) {
         // 一次性提交
         commitRoot();
     }
@@ -481,7 +636,7 @@ const workLoop = (idleDeadLine) => {
 
 requestIdleCallback(workLoop);
 
-const createDom = (fiber) => {
+const createDom = (fiber: any) => {
     const { type, props } = fiber;
     const dom = type === '#text'
         ? document.createTextNode('')
@@ -491,15 +646,15 @@ const createDom = (fiber) => {
     return dom;
 }
 
-const render = (element, container) => {
-    root = {
+const render = (element: any, container: any) => {
+    fiberRoot.root = {
         dom: container,
         props: {
             children: [element]
         },
-        alternate: prevRoot
+        alternate: fiberRoot.prevRoot
     }
-    nextUnit = root;
-    deletions = [];
+    fiberRoot.nextUnit = fiberRoot.root;
+    fiberRoot.deletions = [];
 }
 export default render;

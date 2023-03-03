@@ -1,4 +1,4 @@
-const createElement = (type, props, ...children) => {
+const createElement = (type: string, props: any, ...children: any[]) => {
     // create ReactVitualDom
     return {
         type,
@@ -12,7 +12,7 @@ const createElement = (type, props, ...children) => {
         }
     }
 }
-const createTextElement = (text) => {
+const createTextElement = (text: string) => {
     return {
         type: '#text',
         props: {

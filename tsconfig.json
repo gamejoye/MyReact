@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+        "outDir": "./build/",        // path to output directory
+        "sourceMap": true,          // allow sourcemap support
+        "noImplicitAny": true,
+        "strictNullChecks": true,   // enable strict null checks as a best practice
+        "moduleResolution": "node",
+        "module": "ESNext",            // specify module code generation
+        "esModuleInterop": true,
+        "jsx": "react",             // use typescript to transpile jsx to js
+        "target": "es6",            // specify ECMAScript target version
+        "allowJs": true             // allow a partial TypeScript and JavaScript codebase
+
+    },
+    "include": [
+        "./src/",
+        "./src/images/img.d.ts"
+    ]
+}
